@@ -1,0 +1,692 @@
+---
+title: "28andMe_1d_fc_analyses"
+author: "JingyiWang"
+date: "Aug/10/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls(all=TRUE)) 
+library(pacman)
+p_load(gtools,dplyr, reshape2, ez, lme4,lmerTest,ggplot2,nlme,psych,car,languageR,gdata,scales,doBy,grid,stringr,plyr,ppcor,tidyr,gtools,dplyr,lambda.tools,emmeans,MASS,ggrepel,cocor)
+p_load(Rcpp, viridis,hrbrthemes,hablar)
+require(grid)
+knitr::opts_chunk$set(echo = TRUE)
+`select` <- dplyr::select
+`recode` <- dplyr::recode
+```
+Set color
+```{r}
+library("colorspace")
+hcl_palettes(plot = TRUE)
+Male<-sequential_hcl(5, palette = "Blue-Yellow")
+colorpick<-qualitative_hcl(5, palette = "Set 2")
+fitline<-sequential_hcl(5, palette = "Grays")
+fitline <- "#585858"
+Female<- sequential_hcl(5, palette = "Blue-Yellow")
+Male_ERC<-"#DF00FF"
+Male_aHPC<-Male[2]
+Male_HPC<-Male[3]
+Male_HPC<-Male[3]
+
+Female_ERC<-"#DF00FF"
+Female_aHPC<-Female[2]
+Female_HPC<-Female[3]
+Female_pHPC<-Female[4]
+Female_M1<-fitline
+```
+## Set the plots
+```{r}
+myScatterPlotSFN <- function (data, fname, xvar, yvar, xlabel,ylabel, color, plotTitle, pvalue, rvalue, ymin, ymax) {
+  if(NROW(data)>3){
+    # rvalue=with(data, cor.test(get(xvar),get(yvar), use = "complete.obs"))
+    # if (pvalue <= 0.01){
+    #   annotationNow <- paste("r = ", round(rvalue, digits=2), ", p < 0.01 ")
+    # }
+    # else{
+    #   annotationNow <- paste("r = ", round(rvalue, digits=2), ", p = ", round(pvalue, digits = 2))
+    # }
+     if (pvalue > 0.001 & pvalue <= 0.005){
+      annotationNow <- paste("r = ", round(rvalue, digits=2), "**")
+    }
+    else if (pvalue <= 0.001){
+      annotationNow <- paste("r = ", round(rvalue, digits=2), "***")
+    }
+    else if (pvalue > 0.005 & pvalue <= 0.05){
+      annotationNow <- paste("r = ", round(rvalue, digits=2), "*")
+    }
+    else if (pvalue > 0.05){
+      annotationNow <- paste("r = ", round(rvalue, digits=2))
+    }
+    # rhovalue=with(data, cor.test(get(xvar),get(yvar), use = "complete.obs", method="spearman",exact=FALSE ))
+    ggplot(data, aes_string(x=xvar, y=yvar)) +
+      geom_point(shape = 21, colour = "black", fill = color, size = 1, stroke = 0.5, alpha=1/10)+
+      # geom_point(shape=19,  size = 3, colour=color, alpha = 1/10) + 
+      geom_smooth(method=lm, colour=color, size = 1.25, fill = color, se=TRUE ) + # Add linear regression lines #999999
+      theme_classic(base_size=11)+ #gray or bw # original 15
+      # scale_y_continuous(expand = c(0,0),limits = c(0,ymax))+ #Set the y-axis limits
+      # ylim = ymax +
+      xlab(xlabel) + 
+      ylab("Similarity (z)") +  
+      ggtitle(plotTitle)+
+      annotate("text", size= 2, x=Inf, y = Inf, label = annotationNow,colour = "black",vjust=1.1, hjust=1)   +
+      # annotate("text", size= 3, x=Inf, y = Inf, label =paste(" p < 0.01 ", "n = ", round(as.numeric(rvalue[2])+2, digits=2)),colour = "black",vjust=1, hjust=1.1)   +
+      theme(axis.line = element_line(colour = 'black', size = 0.5))+
+  theme(axis.ticks = element_line(colour = "black", size = 0.25))+
+      theme(plot.title = element_text(hjust = 0.5), panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank())+
+      scale_y_continuous(limits = c(ymin,ymax), labels = scales::number_format(accuracy = 0.1))
+    ggsave(fname,height=2, width=1.9, dpi=300)
+  }}
+```
+##Load the data. 
+```{r}
+# Set working directory to source file location
+setwd("YOURRESULTSDIR/results/1D_fc/postanat_output")
+# Load the data.
+#regional-whole brain multivariate pattern
+myData_AllsessionsGMonly <- read.csv("28andMe_voxelcorrel_fc_z_AllsessionsGMonly.csv")
+
+#regional-whole brain univariate pattern
+# uniTimecorr <- read.csv("uniPairs.csv")
+```
+Check the missing seed_mask
+```{r}
+# Check <- anti_join(myData_AllsessionsCSFremove, myData_AllsessionsGMonlyNoCerebellum, by=c("Seed", "Mask", "Session_1", "Session_2"))
+```
+
+
+Add column SeedMask for later usage
+```{r}
+FuncSeedMaks <- function(myData) {
+myData$SeedMask <- paste(myData$Seed, myData$Mask, sep="_")
+myData$Subject <- as.numeric(as.character(myData$Subject))
+nrow(myData)
+myData <-myData %>% drop_na(CorrelationZ)
+nrow(myData)
+return(myData$SeedMask)
+}
+myData_AllsessionsGMonly$SeedMask <- FuncSeedMaks(myData_AllsessionsGMonly)
+
+```
+
+**add logtime column**
+```{r}
+myData_AllsessionsGMonly$logTime <- log(myData_AllsessionsGMonly$TimeInterval)
+
+```
+
+
+**calculate r for each pair of brain structures for each participant**
+```{r}
+FuncGetR <- function(myData){
+vec_SeedMask <- c()
+vec_participant <-c()
+vec_r_spearman <-c()
+vec_p_spearman <-c()
+vec_r_pearson <-c()
+vec_p_pearson <-c()
+vec_chanceP <- c()
+vec_n <- c()
+
+vec_chanceP_log <- c()
+
+vec_log_r_spearman <-c()
+vec_log_p_spearman <-c()
+vec_log_r_pearson <-c()
+vec_log_p_pearson <-c()
+for (ThisSub in unique(myData$Subject)){
+  for (mySeedMask in unique(myData$SeedMask)){
+    myData_subset= subset(myData, SeedMask==mySeedMask & Subject==ThisSub)
+    #3Sd outlier check
+upper <- mean(myData_subset$CorrelationZ) + 3*sd(myData_subset$CorrelationZ)
+lower <- mean(myData_subset$CorrelationZ) - 3*sd(myData_subset$CorrelationZ)
+myData_subset <- myData_subset[myData_subset$CorrelationZ < upper & myData_subset$CorrelationZ>lower,]
+vec_n <- append(vec_n, nrow(myData_subset))
+    tmp_spearman <- cor.test(myData_subset$CorrelationZ,myData_subset$TimeInterval, method = 'spearman',exact = FALSE)
+    r_value_spearman <- tmp_spearman[["estimate"]]
+    p_value_spearman <- tmp_spearman[["p.value"]]
+    
+    vec_p_spearman<-append(vec_p_spearman, round(as.numeric(p_value_spearman), digits = 5))
+    vec_r_spearman<-append(vec_r_spearman, round(as.numeric(r_value_spearman), digits = 5))
+    
+    tmp_pearson <- cor.test(myData_subset$CorrelationZ,myData_subset$TimeInterval, method = 'pearson',exact = FALSE)
+    r_value_pearson <- tmp_pearson[["estimate"]]
+    p_value_pearson <- tmp_pearson[["p.value"]]
+    
+    vec_p_pearson<-append(vec_p_pearson, round(as.numeric(p_value_pearson), digits = 5))
+    vec_r_pearson<-append(vec_r_pearson, round(as.numeric(r_value_pearson), digits = 5))
+    
+    #correlation with log time
+    tmp_spearman <- cor.test(myData_subset$CorrelationZ,myData_subset$logTime, method = 'spearman',exact = FALSE)
+    r_value_spearman <- tmp_spearman[["estimate"]]
+    p_value_spearman <- tmp_spearman[["p.value"]]
+    
+    vec_log_p_spearman<-append(vec_log_p_spearman, round(as.numeric(p_value_spearman), digits = 5))
+    vec_log_r_spearman<-append(vec_log_r_spearman, round(as.numeric(r_value_spearman), digits = 5))
+    
+    tmp_pearson <- cor.test(myData_subset$CorrelationZ,myData_subset$logTime, method = 'pearson',exact = FALSE)
+    r_value_pearson_log <- tmp_pearson[["estimate"]]
+    p_value_pearson_log <- tmp_pearson[["p.value"]]
+    
+    vec_log_p_pearson<-append(vec_log_p_pearson, round(as.numeric(p_value_pearson_log), digits = 5))
+    vec_log_r_pearson<-append(vec_log_r_pearson, round(as.numeric(r_value_pearson_log), digits = 5))
+    
+    vec_SeedMask<-append(vec_SeedMask, mySeedMask)
+    vec_participant<-append(vec_participant,ThisSub)
+    
+
+     #non-parametric chance check
+    i<-0
+    tmp_chanceP <- c()
+    tmp_chanceP_log <- c()
+repeat{
+  a_rand <- sample(myData_subset$TimeInterval)
+  log_rand <- sample(myData_subset$logTime)
+  corr<-myData_subset$CorrelationZ
+  tmp_pearson <- cor.test(a_rand,corr, method = 'pearson',exact = FALSE)
+    chancer_value <- tmp_pearson[["estimate"]]
+    
+  #logtime
+    tmp_pearson <- cor.test(log_rand,corr, method = 'pearson',exact = FALSE)
+    chancer_value_log <- tmp_pearson[["estimate"]]
+    
+    tmp_chanceP<-append(tmp_chanceP, round(as.numeric(chancer_value), digits = 5))
+    tmp_chanceP_log<-append(tmp_chanceP_log, round(as.numeric(chancer_value_log), digits = 5))
+    i=i+1
+    if (i==5000){break}
+}
+PermutationValue<-tmp_chanceP
+PermutationValue_log <- tmp_chanceP_log
+
+pval_corr=(sum(PermutationValue <=r_value_pearson) +1) / (length(PermutationValue) + 1)
+vec_chanceP<-append(vec_chanceP, pval_corr)
+
+pval_corr_log=(sum(PermutationValue_log <=r_value_pearson_log) +1) / (length(PermutationValue) + 1)
+vec_chanceP_log <- append(vec_chanceP_log, pval_corr_log)
+}}
+my_R <- data.frame(vec_participant, vec_SeedMask,vec_n, vec_r_spearman, vec_p_spearman,vec_r_pearson, vec_p_pearson, vec_chanceP, vec_log_r_spearman, vec_log_p_spearman,vec_log_r_pearson, vec_log_p_pearson, vec_chanceP_log)
+# my_R$vec_chanceP<-my_R$vec_chanceP
+my_R$vec_chanceP_log<-round(my_R$vec_chanceP_log,3)
+# nrow(my_R)
+return(my_R)
+}
+
+my_R_AllsessionsGMonly <- FuncGetR(myData_AllsessionsGMonly)
+
+ROI_r <-my_R_AllsessionsGMonly[my_R_AllsessionsGMonly$vec_SeedMask %in% c("ERC_whole", "HPC_whole", "aHPC_whole", "pHPC_whole", "M1_whole", "PRC_whole", "ERC_HPC", "HPC_ERC", "PHC_whole"),]
+```
+Change Amy_bin_50 to Amy
+```{r}
+library(stringr)
+
+my_R_AllsessionsGMonly$vec_SeedMask <- str_replace(my_R_AllsessionsGMonly$vec_SeedMask, "Amy_50_bin", "Amy")
+
+myData_AllsessionsGMonly$Seed <- str_replace(myData_AllsessionsGMonly$Seed, "Amy_50_bin", "Amy")
+
+myData_AllsessionsGMonly$Mask <- str_replace(myData_AllsessionsGMonly$Mask, "Amy_50_bin", "Amy")
+
+myData_AllsessionsGMonly$SeedMask <- str_replace(myData_AllsessionsGMonly$SeedMask, "Amy_50_bin", "Amy")
+
+```
+
+**calculate cocor for interesting ROI with whole brain fc**
+Cocor: http://comparingcorrelations.org/
+```{r}
+FuncSum <- function(my_R, myData){
+pairTotest<-c("ERC_whole","pHPC_whole","aHPC_whole","HPC_whole", "CA1_whole", "SUB_whole","DG_whole","CA2+3_whole", "PHC_whole", "PRC_whole", "PRC_whole", "Amy_whole")
+
+tested_pair <- c()
+control_pair<- c()
+cocor_pair<-c()
+
+TestPair_r <-c()
+TestPair_p <-c()
+
+ControlPair_r <-c()
+ControlPair_p <-c()
+
+CocorPair_r <-c()
+CocorPair_p <-c()
+
+cocor_p <-c()
+
+Chance_p <- c()
+
+for (i in pairTotest){
+  
+  k<-sub("\\_.*","",i)
+  j<-sub(".*_","",i)
+  #for V1_exvivo control
+  c_jh<-c("V1_exvivo",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("V1_exvivo",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+  
+  #for V1_exvivo.thresh control
+  c_jh<-c("V1_exvivo.thresh",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("V1_exvivo.thresh",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+  
+  #for BA4a_exvivo control
+  c_jh<-c("BA4a_exvivo",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("BA4a_exvivo",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+  
+  #for BA4p_exvivo control
+  c_jh<-c("BA4p_exvivo",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("BA4p_exvivo",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+  
+  #for M1 control
+  c_jh<-c("M1",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("M1",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+  
+  #for "Amy_control" as control
+  c_jh<-c("Amy_control",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("Amy_control",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+
+  #for "Amy" as control
+  c_jh<-c("Amy",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("Amy",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+  
+  #for "PHC" as control
+  c_jh<-c("PHC",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("PHC",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+   
+   #for "PRC" as control
+   c_jh<-c("PRC",j)
+  jh<-paste(c_jh, collapse = "_")
+  c_kh<-c("PRC",k)
+  kh<-paste(c_kh, collapse = "_")
+  sub="1"
+  tmp_r.jk <- my_R$vec_r_pearson[my_R$vec_SeedMask==i & my_R$vec_participant==sub]
+  tmp_r.jh <- my_R$vec_r_pearson[my_R$vec_SeedMask==jh & my_R$vec_participant==sub]
+  
+  #Get r.kh
+  a <- myData[myData$SeedMask==i,]
+  b <- myData[myData$SeedMask==jh,]
+  tmp_r.kh <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["estimate"]]
+  tmp_r.kh_p <- cor.test(a$CorrelationZ, b$CorrelationZ, method = 'pearson',exact = FALSE)[["p.value"]]
+  
+  tmp_n<-min(my_R$vec_n[my_R$vec_SeedMask==i & my_R$vec_participant==sub], my_R$vec_n[my_R$vec_SeedMask==jh & my_R$vec_participant==sub],my_R$vec_n[my_R$vec_SeedMask==kh & my_R$vec_participant==sub])
+  if (length(tmp_r.jk)>0&length(tmp_r.jh)>0&length(tmp_r.kh)>0){
+    tmpcorr<-cocor.dep.groups.overlap(tmp_r.jk, tmp_r.jh, tmp_r.kh, tmp_n, alternative="less", var.labels=c(j, k,"V1_exvivo"))
+    tmpcorr_p=round(tmpcorr@pearson1898[["p.value"]],5)
+    cocor_p <- append(cocor_p,tmpcorr_p)
+    
+    tested_pair <- append(tested_pair, i)
+  control_pair <- append(control_pair, jh)
+  cocor_pair <- append(cocor_pair, kh)
+  TestPair_r <- append(TestPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask==i])
+  TestPair_p <- append(TestPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask==i])
+  
+  ControlPair_r <- append(ControlPair_r, my_R$vec_r_pearson[my_R$vec_SeedMask == jh])
+  ControlPair_p <- append(ControlPair_p, my_R$vec_p_pearson[my_R$vec_SeedMask == jh])
+  
+  CocorPair_r <- append(CocorPair_r, tmp_r.kh)
+  CocorPair_p <- append(CocorPair_p, tmp_r.kh_p)
+  
+  Chance_p <- append(Chance_p, my_R$vec_chanceP[my_R$vec_SeedMask==i])
+  }
+}
+
+Cocor_results_wholefc <- data.frame(tested_pair, TestPair_r, TestPair_p, control_pair, ControlPair_r,ControlPair_p, cocor_pair,CocorPair_r, CocorPair_p, cocor_p, Chance_p)
+return(Cocor_results_wholefc)
+}
+
+Cocorwhole_AllsessionsGMonly <- FuncSum(my_R_AllsessionsGMonly, myData_AllsessionsGMonly)
+```
+
+Filter for the pair of interest
+```{r}
+Pairfilter <- c("ERC_whole", "HPC_whole", "aHPC_whole", "pHPC_whole", "M1_whole")
+
+Cocor_results_wholefc_pairfilter <- Cocorwhole_AllsessionsGMonly[Cocorwhole_AllsessionsGMonly$tested_pair %in% Pairfilter,]
+write.csv(Cocor_results_wholefc_pairfilter,"YOURRESULTSDIR/Cocorwhole_AllsessionsGMonly_MTLpairs.csv", row.names = FALSE)
+```
+
+Sort the dataframe
+```{r}
+sortCocorResults <- function(Cocorwhole_MildGMonly){
+  PearsonR <- c()
+CocorM1 <- c()
+CocorPRC <- c()
+CocorAMY <- c()
+ROI <- c()
+#ERC
+ROI <- append(ROI, "ERC")
+PearsonR <- append(PearsonR, unique(Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="ERC_whole",]$TestPair_r))
+
+CocorM1 <- append(CocorM1, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="ERC_whole"& Cocorwhole_MildGMonly$control_pair=="M1_whole",]$cocor_p)
+
+CocorPRC <- append(CocorPRC, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="ERC_whole"& Cocorwhole_MildGMonly$control_pair=="PRC_whole",]$cocor_p)
+
+CocorAMY <- append(CocorAMY, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="ERC_whole"& Cocorwhole_MildGMonly$control_pair=="Amy_whole",]$cocor_p)
+
+#aHPC
+ROI <- append(ROI, "aHPC")
+PearsonR <- append(PearsonR, unique(Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="aHPC_whole",]$TestPair_r))
+
+CocorM1 <- append(CocorM1, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="aHPC_whole"& Cocorwhole_MildGMonly$control_pair=="M1_whole",]$cocor_p)
+
+CocorPRC <- append(CocorPRC, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="aHPC_whole"& Cocorwhole_MildGMonly$control_pair=="PRC_whole",]$cocor_p)
+
+CocorAMY <- append(CocorAMY, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="aHPC_whole"& Cocorwhole_MildGMonly$control_pair=="Amy_whole",]$cocor_p)
+
+#HPC
+ROI <- append(ROI, "HPC")
+PearsonR <- append(PearsonR, unique(Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="HPC_whole",]$TestPair_r))
+
+CocorM1 <- append(CocorM1, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="HPC_whole"& Cocorwhole_MildGMonly$control_pair=="M1_whole",]$cocor_p)
+
+CocorPRC <- append(CocorPRC, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="HPC_whole"& Cocorwhole_MildGMonly$control_pair=="PRC_whole",]$cocor_p)
+
+CocorAMY <- append(CocorAMY, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="HPC_whole"& Cocorwhole_MildGMonly$control_pair=="Amy_whole",]$cocor_p)
+
+#pHPC
+ROI <- append(ROI, "pHPC")
+PearsonR <- append(PearsonR, unique(Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="pHPC_whole",]$TestPair_r))
+
+CocorM1 <- append(CocorM1, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="pHPC_whole"& Cocorwhole_MildGMonly$control_pair=="M1_whole",]$cocor_p)
+
+CocorPRC <- append(CocorPRC, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="pHPC_whole"& Cocorwhole_MildGMonly$control_pair=="PRC_whole",]$cocor_p)
+
+CocorAMY <- append(CocorAMY, Cocorwhole_MildGMonly[Cocorwhole_MildGMonly$tested_pair=="pHPC_whole"& Cocorwhole_MildGMonly$control_pair=="Amy_whole",]$cocor_p)
+
+sorted_cocor <- data.frame(ROI, PearsonR, CocorM1, CocorPRC, CocorAMY)
+return(sorted_cocor)
+}
+
+
+Cocorwhole_AllsessionsGMonly_sorted <- sortCocorResults(Cocorwhole_AllsessionsGMonly)
+write.csv(Cocorwhole_AllsessionsGMonly_sorted,"YOURRESULTSDIR/Cocorwhole_AllsessionsGMonly_sorted.csv", row.names = FALSE)
+
+```
+Plot ERC
+```{r}
+sub=1
+Female_ERC<-"#DF00FF"
+setwd("YOURFIGDIR/Figures/")
+rvalue = my_R_AllsessionsGMonly[my_R_AllsessionsGMonly$vec_SeedMask == "ERC_whole",]$vec_r_pearson
+pvalue = my_R_AllsessionsGMonly[my_R_AllsessionsGMonly$vec_SeedMask == "ERC_whole",]$vec_chanceP
+aName="Female"
+myROI="ERC_whole"
+
+myData_subset= subset(myData_AllsessionsGMonly, SeedMask==myROI & Subject==sub)
+#3Sd outlier check
+upper <- mean(myData_subset$CorrelationZ) + 3*sd(myData_subset$CorrelationZ)
+lower <- mean(myData_subset$CorrelationZ) - 3*sd(myData_subset$CorrelationZ)
+
+upper_axis <- mean(myData_subset$CorrelationZ) + 3.1*sd(myData_subset$CorrelationZ)
+lower_axis <- mean(myData_subset$CorrelationZ) - 3.1*sd(myData_subset$CorrelationZ)
+
+myData_subset_filter <- myData_subset[myData_subset$CorrelationZ < upper & myData_subset$CorrelationZ>lower,]
+fname=sprintf('YOURFIGDIR/Figures/%s/Correl_AllsessionsGMonly_%s.pdf',aName, myROI)
+ylab=sprintf('%s', myROI)
+myScatterPlotSFN(myData_subset_filter,fname, "TimeInterval", "CorrelationZ", "Time Interval (day)", "Similarity (z)", Female_ERC, "ERC", pvalue, rvalue, lower_axis, upper_axis)
+```
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
