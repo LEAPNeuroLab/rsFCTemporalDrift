@@ -20,4 +20,4 @@ Step 8: Getting the Session Pair Calculations: The VoxelCorrel_postanat_cluster.
 Step 9: Compute Temporal Drifting Score: The RegionalWholeBrain_Basic.Rmd script is written in R. The required packages are listed in lines 8–16. It calculates the temporal drifting score for each mask and each participant, and performs control analyses to determine whether the neural pattern in a specific ROI is more "drifty" than that in control ROIs.   
 
 
-Please see the READMe_extended.pdf file for the folder structure. _
+Please see the READMe_extended.pdf file for the folder structure. 
