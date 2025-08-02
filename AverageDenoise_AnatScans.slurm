@@ -18,7 +18,7 @@ export FSLDIR PATH
 
 
 ID="01"
-sessions="01 03 05 07"
+sessions="01 03 05 07" # this is the sessions that acquired a anatomical scan
 
 anat_dir="Your_anat_dir" #This is folder contains all the processed anatomical files
 

@@ -101,7 +101,7 @@ def CreateDict(sub, seed):
 sub="01"
 locals()['MSC' + sub] = CreateDict(sub, "replaceseed")
 
-outdir= "YOURSUBDIR/results/1D_fc/1D_fc_FD.2cut/"
+outdir= "YOURSUBDIR/results/1D_fc/"
 
 df = pd.DataFrame()
 

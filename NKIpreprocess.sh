@@ -18,7 +18,7 @@ export PATH=$PATH:/sw/afni/bin
 ##Above are cluster related scripts##
 
 #Where anatomical scans located
-anat_dir="YOURPROJECTDIR/anat" # raw T1High directory
+anat_dir="YOURPROJECTDIR/YOURSUBJECTDIR/anat" # raw T1High directory
 #raw_anat="sub-MSCparticipant_ses-struct01_run-01_T1w.nii.gz" #raw/unprocessed T1high.
 # ave_anat="T1High_ave_RPI"
 anat="T1_brain" # reoriented T1high
